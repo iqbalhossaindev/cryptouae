@@ -423,6 +423,7 @@ footer{text-align:center;padding:4rem 2rem;border-top:1px solid var(--border);}
       <div class="sm-controls">
         <button class="sm-btn" onclick="prevSeg()">◀ PREV</button>
         <button class="sm-btn primary" id="pauseBtn" onclick="togglePause()">⏸ PAUSE</button>
+        <button class="sm-btn" onclick="forcePlayCurrentAudio()">🔊 TEST AUDIO</button>
         <button class="sm-btn" onclick="nextSeg()">NEXT ▶</button>
         <button class="sm-btn" onclick="testCurrentAudio()">🔊 TEST AUDIO</button>
       </div>
@@ -1063,22 +1064,20 @@ function doFlash() {
 }
 
 // ══════════════════════════════════════════════════
-// BUILT-IN DECLAN SAGE OFFLINE VOCAL ENGINE - MOBILE/GITHUB HARD FIX
-// Important fix: audio.play() is called immediately inside the user click flow.
-// No async checking before play, because mobile browsers block delayed autoplay.
+// BUILT-IN LOCAL MP3 VOICE ENGINE - ULTRA DIRECT GITHUB/MOBILE FIX
+// Uses ONLY files inside /audio. No API. No raw GitHub. No cache buster.
+// First audio.play() happens directly after the user taps PLAY THE STORY.
 // ══════════════════════════════════════════════════
 let voiceRunId = 0;
 let offlineVoiceAudio = null;
-let userUnlockedAudio = false;
-const AUDIO_CACHE_VERSION = '2026-05-08-force-direct-v3';
 
 function setVoiceStatus(msg, type) {
   const note = document.getElementById('voiceNote');
   if (!note) return;
   note.textContent = msg;
   if (type === 'error') note.style.color = 'rgba(255,80,80,.95)';
-  else if (type === 'ok') note.style.color = 'rgba(0,255,127,.78)';
-  else note.style.color = 'rgba(255,255,255,.42)';
+  else if (type === 'ok') note.style.color = 'rgba(0,255,127,.85)';
+  else note.style.color = 'rgba(255,255,255,.48)';
 }
 
 function getVoicePlayer() {
@@ -1090,182 +1089,145 @@ function getVoicePlayer() {
     audio.controls = true;
     audio.preload = 'auto';
     audio.setAttribute('playsinline', '');
-    document.body.appendChild(audio);
+    document.querySelector('.sm-bottom')?.prepend(audio);
   }
+  audio.controls = true;
   audio.volume = 1;
-  audio.playbackRate = 1.0;
+  audio.muted = false;
+  audio.playbackRate = 1;
   audio.preload = 'auto';
   audio.setAttribute('playsinline', '');
-  audio.removeAttribute('crossorigin');
   return audio;
+}
+
+function localAudioName(idx, styleIndex = 0) {
+  const n = idx + 1;
+  const nn = String(n).padStart(2, '0');
+  const names = [
+    `audio/segment-${nn}.mp3`,
+    `./audio/segment-${nn}.mp3`,
+    `audio/segment${nn}.mp3`,
+    `audio/segment-${n}.mp3`,
+    `audio/segment${n}.mp3`,
+    `audio/${nn}.mp3`,
+    `audio/${n}.mp3`
+  ];
+  return names[styleIndex] || null;
 }
 
 function setMusicDucking(on) {
   if (!musicGain || !aCtx) return;
-  const target = on ? 0.035 : musicTarget;
+  const target = on ? 0.025 : musicTarget;
   try {
     musicGain.gain.cancelScheduledValues(aCtx.currentTime);
-    musicGain.gain.linearRampToValueAtTime(target, aCtx.currentTime + 0.18);
+    musicGain.gain.linearRampToValueAtTime(target, aCtx.currentTime + 0.12);
   } catch(e) {
     musicGain.gain.value = target;
   }
 }
 
-function addCacheBuster(url) {
-  if (url.startsWith('data:')) return url;
-  return url + (url.includes('?') ? '&' : '?') + 'v=' + encodeURIComponent(AUDIO_CACHE_VERSION);
-}
-
-function pageBasePath() {
-  // Relative paths are the most reliable on GitHub Pages and custom domains.
-  // If the site is at /cryptouae/, audio/ resolves to /cryptouae/audio/.
-  const path = location.pathname || '/';
-  const parts = path.split('/').filter(Boolean);
-  if (location.hostname.endsWith('github.io') && parts.length > 0) {
-    return '/' + parts[0] + '/';
-  }
-  return './';
-}
-
-function builtInAudioCandidates(idx) {
-  const n = idx + 1;
-  const nn = String(n).padStart(2, '0');
-  const files = [
-    `segment-${nn}.mp3`,   // segment-01.mp3
-    `segment${nn}.mp3`,    // segment01.mp3
-    `segment-${n}.mp3`,    // segment-1.mp3
-    `segment${n}.mp3`,     // segment1.mp3 and segment20.mp3
-    `${nn}.mp3`,           // 01.mp3
-    `${n}.mp3`             // 1.mp3
-  ];
-
-  const bases = [
-    'audio/',
-    './audio/',
-    pageBasePath() + 'audio/'
-  ];
-
-  // Extra fallback for the project name shown in your GitHub repo.
-  if (location.hostname.endsWith('github.io')) bases.push('/cryptouae/audio/');
-
-  const out = [];
-  for (const base of bases) {
-    for (const file of files) out.push(base + file);
-  }
-
-  // Raw GitHub fallbacks. These help if the page is opened in unusual contexts.
-  const possibleUsers = ['iqbalhossaindev', 'iqbalhossairdev'];
-  for (const user of possibleUsers) {
-    for (const file of files) {
-      out.push(`https://raw.githubusercontent.com/${user}/cryptouae/main/audio/${file}`);
-    }
-  }
-  return [...new Set(out)];
-}
-
 function unlockAudioByUserGesture() {
-  // Kept for compatibility with startStory(), but intentionally does nothing now.
-  // The old muted pre-play could consume the mobile user gesture before narration started.
-  userUnlockedAudio = true;
+  // Do not do muted pre-play here. Some mobile browsers consume the gesture.
 }
 
 function stopVoice() {
   voiceRunId++;
   const audio = getVoicePlayer();
   try { audio.pause(); } catch(e) {}
-  try { audio.removeAttribute('src'); audio.load(); } catch(e) {}
-  offlineVoiceAudio = audio;
+  try { audio.currentTime = 0; } catch(e) {}
   setMusicDucking(false);
+  stopPulse();
 }
 
-function markAudioBlocked(idx) {
-  paused = true;
-  playing = false;
-  const btn = document.getElementById('pauseBtn');
-  if (btn) btn.textContent = '▶ TAP TO PLAY AUDIO';
-  setVoiceStatus(`// MOBILE BROWSER BLOCKED AUDIO. TAP ▶ TAP TO PLAY AUDIO OR PRESS PLAY ON THE AUDIO BAR. SEGMENT ${idx + 1}`, 'error');
+function describeAudioError(audio) {
+  if (!audio || !audio.error) return 'unknown audio error';
+  const code = audio.error.code;
+  const map = {
+    1: 'MEDIA_ERR_ABORTED',
+    2: 'MEDIA_ERR_NETWORK',
+    3: 'MEDIA_ERR_DECODE',
+    4: 'MEDIA_ERR_SRC_NOT_SUPPORTED or file not found'
+  };
+  return map[code] || ('audio error code ' + code);
 }
 
-function playAudioFromCandidates(idx, runId, onEnd) {
+function playAudioVariant(idx, variantIndex, runId, onEnd) {
+  if (runId !== voiceRunId) return;
   const audio = getVoicePlayer();
-  offlineVoiceAudio = audio;
-  const candidates = builtInAudioCandidates(idx);
-  let candidateIndex = 0;
-  let lastSrc = '';
-  let endedHandled = false;
+  const src = localAudioName(idx, variantIndex);
 
-  function tryNextCandidate() {
-    if (runId !== voiceRunId) return;
-    if (candidateIndex >= candidates.length) {
-      setMusicDucking(false);
-      stopPulse();
-      paused = true;
-      playing = false;
-      const btn = document.getElementById('pauseBtn');
-      if (btn) btn.textContent = '▶ RETRY AUDIO';
-      setVoiceStatus(`// AUDIO NOT FOUND FOR SEGMENT ${idx + 1}. LAST TRIED: ${lastSrc}`, 'error');
-      return;
-    }
-
-    lastSrc = candidates[candidateIndex++];
-    const srcWithCache = addCacheBuster(lastSrc);
-
-    audio.onplay = () => {
-      if (runId !== voiceRunId) return;
-      setMusicDucking(true);
-      startPulse();
-      setVoiceStatus(`// PLAYING BUILT-IN AUDIO ${idx + 1}: ${lastSrc}`, 'ok');
-    };
-
-    audio.onended = () => {
-      if (runId !== voiceRunId || endedHandled) return;
-      endedHandled = true;
-      setMusicDucking(false);
-      stopPulse();
-      setVoiceStatus(`// FINISHED SEGMENT ${idx + 1}`, 'ok');
-      if (onEnd) onEnd();
-    };
-
-    audio.onerror = () => {
-      if (runId !== voiceRunId) return;
-      // Try the next possible filename/path automatically.
-      setVoiceStatus(`// AUDIO PATH FAILED: ${lastSrc} — TRYING NEXT`, 'error');
-      setTimeout(tryNextCandidate, 80);
-    };
-
-    try {
-      setVoiceStatus(`// STARTING AUDIO SEGMENT ${idx + 1}: ${lastSrc}`, 'ok');
-      audio.src = srcWithCache;
-      audio.load();
-      const p = audio.play();
-      if (p && typeof p.then === 'function') {
-        p.catch(err => {
-          if (runId !== voiceRunId) return;
-          const name = err && err.name ? err.name : 'PlaybackError';
-          // If the file is unsupported or missing, onerror may also fire. For NotAllowedError, user tap is needed.
-          if (name === 'NotAllowedError') markAudioBlocked(idx);
-          else setVoiceStatus(`// AUDIO PLAYBACK ERROR: ${name}. TRYING NEXT IF AVAILABLE.`, 'error');
-        });
-      }
-    } catch (err) {
-      if (runId !== voiceRunId) return;
-      const name = err && err.name ? err.name : 'PlaybackError';
-      if (name === 'NotAllowedError') markAudioBlocked(idx);
-      else tryNextCandidate();
-    }
+  if (!src) {
+    paused = true;
+    playing = false;
+    const btn = document.getElementById('pauseBtn');
+    if (btn) btn.textContent = '▶ RETRY AUDIO';
+    setMusicDucking(false);
+    stopPulse();
+    setVoiceStatus(`// AUDIO NOT FOUND. Check this direct URL in browser: audio/segment-${String(idx + 1).padStart(2, '0')}.mp3`, 'error');
+    return;
   }
 
-  tryNextCandidate();
+  audio.onplay = () => {
+    if (runId !== voiceRunId) return;
+    setMusicDucking(true);
+    startPulse();
+    setVoiceStatus(`// PLAYING: ${src}`, 'ok');
+  };
+
+  audio.onended = () => {
+    if (runId !== voiceRunId) return;
+    setMusicDucking(false);
+    stopPulse();
+    setVoiceStatus(`// FINISHED SEGMENT ${idx + 1}`, 'ok');
+    if (onEnd) onEnd();
+  };
+
+  audio.onerror = () => {
+    if (runId !== voiceRunId) return;
+    const errText = describeAudioError(audio);
+    setVoiceStatus(`// FAILED: ${src} (${errText}). Trying another filename...`, 'error');
+    setTimeout(() => playAudioVariant(idx, variantIndex + 1, runId, onEnd), 60);
+  };
+
+  try {
+    audio.src = src;
+    audio.currentTime = 0;
+    audio.load();
+    setVoiceStatus(`// LOADING AUDIO: ${src}`, 'ok');
+    const playPromise = audio.play();
+    if (playPromise && typeof playPromise.catch === 'function') {
+      playPromise.catch(err => {
+        if (runId !== voiceRunId) return;
+        const name = err && err.name ? err.name : 'PlaybackError';
+        if (name === 'NotAllowedError') {
+          paused = true;
+          playing = false;
+          const btn = document.getElementById('pauseBtn');
+          if (btn) btn.textContent = '▶ TAP TO PLAY AUDIO';
+          setVoiceStatus('// CHROME BLOCKED AUDIO. Tap the audio bar play button once, or tap TEST AUDIO.', 'error');
+        } else {
+          setVoiceStatus(`// PLAY ERROR: ${name}. Press TEST AUDIO or check the direct MP3 URL.`, 'error');
+        }
+      });
+    }
+  } catch (err) {
+    setVoiceStatus(`// AUDIO EXCEPTION: ${err.message || err}. Trying next filename...`, 'error');
+    setTimeout(() => playAudioVariant(idx, variantIndex + 1, runId, onEnd), 60);
+  }
+}
+
+function playBuiltInAudio(idx, onEnd) {
+  const runId = ++voiceRunId;
+  playAudioVariant(idx, 0, runId, onEnd);
 }
 
 function speakText(text, idx, onEnd) {
   stopVoice();
-  const runId = ++voiceRunId;
-  playAudioFromCandidates(idx, runId, onEnd);
+  playBuiltInAudio(idx, onEnd);
 }
 
-function testCurrentAudio() {
-  clickSound();
+function forcePlayCurrentAudio() {
+  // This is tied directly to a user tap, so mobile Chrome should allow it.
   paused = false;
   playing = true;
   const btn = document.getElementById('pauseBtn');
@@ -1328,6 +1290,13 @@ function playSegment(idx) {
   fillEl.style.background = `linear-gradient(90deg,${seg.color},#00ff7f)`;
   fillEl.style.boxShadow = `0 0 12px ${seg.color}`;
 
+  // Start voice immediately before extra sound effects, so mobile browsers keep the user tap permission.
+  speakText(seg.text, idx, () => {
+    if (!paused && playing) {
+      segEndTimer = setTimeout(() => playSegment(idx + 1), 850);
+    }
+  });
+
   // Sounds + music dynamics
   updateMusicIntensity(seg.ch);
   if (seg.ch >= 9) alertSound();
@@ -1345,13 +1314,6 @@ function playSegment(idx) {
     if (ci < txt.length) { el.textContent += txt[ci]; ci++; typeTimer = setTimeout(typeNext, 16); }
   }
   typeNext();
-
-  // Voice
-  speakText(txt, idx, () => {
-    if (!paused && playing) {
-      segEndTimer = setTimeout(() => playSegment(idx + 1), 850);
-    }
-  });
 }
 
 function togglePause() {
