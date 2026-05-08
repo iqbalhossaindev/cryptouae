@@ -224,7 +224,9 @@ footer{text-align:center;padding:4rem 2rem;border-top:1px solid var(--border);}
 .sm-btn:hover{border-color:var(--accent);color:var(--accent);}
 .sm-btn.primary{border-color:var(--accent);color:var(--accent);}
 .sm-voice-note{font-family:'Share Tech Mono',monospace;font-size:.58rem;
-  color:rgba(255,255,255,.2);letter-spacing:.2rem;text-align:center;}
+  color:rgba(255,255,255,.2);letter-spacing:.2rem;text-align:center;max-width:92vw;word-break:break-word;}
+.voice-player{width:min(720px,92vw);height:34px;opacity:.72;filter:invert(1) hue-rotate(165deg);}
+.voice-player::-webkit-media-controls-panel{background:#111;}
 
 
 
@@ -422,7 +424,9 @@ footer{text-align:center;padding:4rem 2rem;border-top:1px solid var(--border);}
         <button class="sm-btn" onclick="prevSeg()">◀ PREV</button>
         <button class="sm-btn primary" id="pauseBtn" onclick="togglePause()">⏸ PAUSE</button>
         <button class="sm-btn" onclick="nextSeg()">NEXT ▶</button>
+        <button class="sm-btn" onclick="testCurrentAudio()">🔊 TEST AUDIO</button>
       </div>
+      <audio id="voicePlayer" class="voice-player" controls preload="auto" playsinline></audio>
       <p class="sm-voice-note" id="voiceNote">// BUILT-IN OFFLINE CINEMATIC VOICE READY</p>
     </div>
   </div>
@@ -1059,25 +1063,46 @@ function doFlash() {
 }
 
 // ══════════════════════════════════════════════════
-// BUILT-IN DECLAN SAGE OFFLINE VOCAL ENGINE
-// Uses local MP3 files: audio/segment-01.mp3 ... audio/segment-29.mp3
-// No API. No internet. No monthly limit. Works from the ZIP folder.
+// BUILT-IN DECLAN SAGE OFFLINE VOCAL ENGINE - MOBILE/GITHUB HARD FIX
+// Important fix: audio.play() is called immediately inside the user click flow.
+// No async checking before play, because mobile browsers block delayed autoplay.
 // ══════════════════════════════════════════════════
 let voiceRunId = 0;
 let offlineVoiceAudio = null;
+let userUnlockedAudio = false;
+const AUDIO_CACHE_VERSION = '2026-05-08-force-direct-v3';
 
 function setVoiceStatus(msg, type) {
   const note = document.getElementById('voiceNote');
   if (!note) return;
   note.textContent = msg;
-  if (type === 'error') note.style.color = 'rgba(255,80,80,.9)';
-  else if (type === 'ok') note.style.color = 'rgba(0,255,127,.72)';
-  else note.style.color = 'rgba(255,255,255,.32)';
+  if (type === 'error') note.style.color = 'rgba(255,80,80,.95)';
+  else if (type === 'ok') note.style.color = 'rgba(0,255,127,.78)';
+  else note.style.color = 'rgba(255,255,255,.42)';
+}
+
+function getVoicePlayer() {
+  let audio = document.getElementById('voicePlayer');
+  if (!audio) {
+    audio = document.createElement('audio');
+    audio.id = 'voicePlayer';
+    audio.className = 'voice-player';
+    audio.controls = true;
+    audio.preload = 'auto';
+    audio.setAttribute('playsinline', '');
+    document.body.appendChild(audio);
+  }
+  audio.volume = 1;
+  audio.playbackRate = 1.0;
+  audio.preload = 'auto';
+  audio.setAttribute('playsinline', '');
+  audio.removeAttribute('crossorigin');
+  return audio;
 }
 
 function setMusicDucking(on) {
-  if (!musicGain) return;
-  const target = on ? 0.055 : musicTarget;
+  if (!musicGain || !aCtx) return;
+  const target = on ? 0.035 : musicTarget;
   try {
     musicGain.gain.cancelScheduledValues(aCtx.currentTime);
     musicGain.gain.linearRampToValueAtTime(target, aCtx.currentTime + 0.18);
@@ -1086,113 +1111,166 @@ function setMusicDucking(on) {
   }
 }
 
-function stopVoice() {
-  voiceRunId++;
-  if (offlineVoiceAudio) {
-    try { offlineVoiceAudio.pause(); } catch(e) {}
-    try { offlineVoiceAudio.src = ''; offlineVoiceAudio.load(); } catch(e) {}
+function addCacheBuster(url) {
+  if (url.startsWith('data:')) return url;
+  return url + (url.includes('?') ? '&' : '?') + 'v=' + encodeURIComponent(AUDIO_CACHE_VERSION);
+}
+
+function pageBasePath() {
+  // Relative paths are the most reliable on GitHub Pages and custom domains.
+  // If the site is at /cryptouae/, audio/ resolves to /cryptouae/audio/.
+  const path = location.pathname || '/';
+  const parts = path.split('/').filter(Boolean);
+  if (location.hostname.endsWith('github.io') && parts.length > 0) {
+    return '/' + parts[0] + '/';
   }
-  offlineVoiceAudio = null;
-  setMusicDucking(false);
+  return './';
 }
 
 function builtInAudioCandidates(idx) {
-  const file = `segment-${String(idx + 1).padStart(2, '0')}.mp3`;
-
-  // Primary path for GitHub Pages and normal hosting:
-  // index.html at repository root, audio files inside /audio/.
-  const candidates = [
-    `audio/${file}`,
-    `./audio/${file}`
+  const n = idx + 1;
+  const nn = String(n).padStart(2, '0');
+  const files = [
+    `segment-${nn}.mp3`,   // segment-01.mp3
+    `segment${nn}.mp3`,    // segment01.mp3
+    `segment-${n}.mp3`,    // segment-1.mp3
+    `segment${n}.mp3`,     // segment1.mp3 and segment20.mp3
+    `${nn}.mp3`,           // 01.mp3
+    `${n}.mp3`             // 1.mp3
   ];
 
-  // Extra fallback for your GitHub Pages project site:
-  // https://iqbalhossairdev.github.io/cryptouae/
-  if (location.hostname.endsWith('github.io')) {
-    candidates.push(`/cryptouae/audio/${file}`);
+  const bases = [
+    'audio/',
+    './audio/',
+    pageBasePath() + 'audio/'
+  ];
+
+  // Extra fallback for the project name shown in your GitHub repo.
+  if (location.hostname.endsWith('github.io')) bases.push('/cryptouae/audio/');
+
+  const out = [];
+  for (const base of bases) {
+    for (const file of files) out.push(base + file);
   }
 
-  // Last fallback: direct GitHub raw file URL.
-  // This helps if the HTML is opened from another domain but the audio is in this repo.
-  candidates.push(`https://raw.githubusercontent.com/iqbalhossairdev/cryptouae/main/audio/${file}`);
-
-  return candidates;
+  // Raw GitHub fallbacks. These help if the page is opened in unusual contexts.
+  const possibleUsers = ['iqbalhossaindev', 'iqbalhossairdev'];
+  for (const user of possibleUsers) {
+    for (const file of files) {
+      out.push(`https://raw.githubusercontent.com/${user}/cryptouae/main/audio/${file}`);
+    }
+  }
+  return [...new Set(out)];
 }
 
-async function playAudioFromCandidates(idx, runId, onEnd) {
+function unlockAudioByUserGesture() {
+  // Kept for compatibility with startStory(), but intentionally does nothing now.
+  // The old muted pre-play could consume the mobile user gesture before narration started.
+  userUnlockedAudio = true;
+}
+
+function stopVoice() {
+  voiceRunId++;
+  const audio = getVoicePlayer();
+  try { audio.pause(); } catch(e) {}
+  try { audio.removeAttribute('src'); audio.load(); } catch(e) {}
+  offlineVoiceAudio = audio;
+  setMusicDucking(false);
+}
+
+function markAudioBlocked(idx) {
+  paused = true;
+  playing = false;
+  const btn = document.getElementById('pauseBtn');
+  if (btn) btn.textContent = '▶ TAP TO PLAY AUDIO';
+  setVoiceStatus(`// MOBILE BROWSER BLOCKED AUDIO. TAP ▶ TAP TO PLAY AUDIO OR PRESS PLAY ON THE AUDIO BAR. SEGMENT ${idx + 1}`, 'error');
+}
+
+function playAudioFromCandidates(idx, runId, onEnd) {
+  const audio = getVoicePlayer();
+  offlineVoiceAudio = audio;
   const candidates = builtInAudioCandidates(idx);
-  let pos = 0;
+  let candidateIndex = 0;
+  let lastSrc = '';
+  let endedHandled = false;
 
-  function tryNext() {
+  function tryNextCandidate() {
     if (runId !== voiceRunId) return;
-
-    if (pos >= candidates.length) {
+    if (candidateIndex >= candidates.length) {
       setMusicDucking(false);
       stopPulse();
-      setVoiceStatus(`// AUDIO FILE ERROR - NOT FOUND: audio/segment-${String(idx + 1).padStart(2, '0')}.mp3`, 'error');
       paused = true;
       playing = false;
       const btn = document.getElementById('pauseBtn');
       if (btn) btn.textContent = '▶ RETRY AUDIO';
+      setVoiceStatus(`// AUDIO NOT FOUND FOR SEGMENT ${idx + 1}. LAST TRIED: ${lastSrc}`, 'error');
       return;
     }
 
-    const src = candidates[pos++];
-    setVoiceStatus(`// LOADING AUDIO SEGMENT ${idx + 1}: ${src}`, 'ok');
-
-    const audio = new Audio(src);
-    audio.preload = 'auto';
-    audio.volume = 1;
-    audio.playbackRate = 1.0;
-    audio.playsInline = true;
-    audio.crossOrigin = 'anonymous';
-    offlineVoiceAudio = audio;
-
-    audio.oncanplaythrough = () => {
-      if (runId !== voiceRunId) return;
-      setVoiceStatus(`// DECLAN SAGE BUILT-IN NARRATOR - READY SEGMENT ${idx + 1}`, 'ok');
-    };
+    lastSrc = candidates[candidateIndex++];
+    const srcWithCache = addCacheBuster(lastSrc);
 
     audio.onplay = () => {
       if (runId !== voiceRunId) return;
       setMusicDucking(true);
       startPulse();
-      setVoiceStatus(`// DECLAN SAGE BUILT-IN NARRATOR - SPEAKING SEGMENT ${idx + 1}`, 'ok');
+      setVoiceStatus(`// PLAYING BUILT-IN AUDIO ${idx + 1}: ${lastSrc}`, 'ok');
     };
 
     audio.onended = () => {
-      if (runId !== voiceRunId) return;
-      offlineVoiceAudio = null;
+      if (runId !== voiceRunId || endedHandled) return;
+      endedHandled = true;
       setMusicDucking(false);
       stopPulse();
-      setVoiceStatus(`// DECLAN SAGE BUILT-IN NARRATOR - FINISHED SEGMENT ${idx + 1}`, 'ok');
+      setVoiceStatus(`// FINISHED SEGMENT ${idx + 1}`, 'ok');
       if (onEnd) onEnd();
     };
 
     audio.onerror = () => {
       if (runId !== voiceRunId) return;
-      tryNext();
+      // Try the next possible filename/path automatically.
+      setVoiceStatus(`// AUDIO PATH FAILED: ${lastSrc} — TRYING NEXT`, 'error');
+      setTimeout(tryNextCandidate, 80);
     };
 
-    audio.play().catch(() => {
+    try {
+      setVoiceStatus(`// STARTING AUDIO SEGMENT ${idx + 1}: ${lastSrc}`, 'ok');
+      audio.src = srcWithCache;
+      audio.load();
+      const p = audio.play();
+      if (p && typeof p.then === 'function') {
+        p.catch(err => {
+          if (runId !== voiceRunId) return;
+          const name = err && err.name ? err.name : 'PlaybackError';
+          // If the file is unsupported or missing, onerror may also fire. For NotAllowedError, user tap is needed.
+          if (name === 'NotAllowedError') markAudioBlocked(idx);
+          else setVoiceStatus(`// AUDIO PLAYBACK ERROR: ${name}. TRYING NEXT IF AVAILABLE.`, 'error');
+        });
+      }
+    } catch (err) {
       if (runId !== voiceRunId) return;
-      setMusicDucking(false);
-      stopPulse();
-      setVoiceStatus('// BROWSER BLOCKED AUDIO - TAP PAUSE/RESUME OR OPEN THE GITHUB PAGES LIVE URL', 'error');
-      paused = true;
-      playing = false;
-      const btn = document.getElementById('pauseBtn');
-      if (btn) btn.textContent = '▶ START AUDIO';
-    });
+      const name = err && err.name ? err.name : 'PlaybackError';
+      if (name === 'NotAllowedError') markAudioBlocked(idx);
+      else tryNextCandidate();
+    }
   }
 
-  tryNext();
+  tryNextCandidate();
 }
 
-async function speakText(text, idx, onEnd) {
+function speakText(text, idx, onEnd) {
   stopVoice();
   const runId = ++voiceRunId;
-  await playAudioFromCandidates(idx, runId, onEnd);
+  playAudioFromCandidates(idx, runId, onEnd);
+}
+
+function testCurrentAudio() {
+  clickSound();
+  paused = false;
+  playing = true;
+  const btn = document.getElementById('pauseBtn');
+  if (btn) btn.textContent = '⏸ PAUSE';
+  speakText(SEGMENTS[curSeg]?.text || '', curSeg, null);
 }
 
 // ══════════════════════════════════════════════════
@@ -1202,6 +1280,7 @@ let curSeg = 0, paused = false, playing = false;
 let typeTimer = null;
 
 function startStory() {
+  unlockAudioByUserGesture();
   initAudio();
   clickSound();
   document.getElementById('storyMode').classList.add('active');
