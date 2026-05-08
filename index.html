@@ -1096,68 +1096,103 @@ function stopVoice() {
   setMusicDucking(false);
 }
 
-function builtInAudioUrl(idx) {
-  return `audio/segment-${String(idx + 1).padStart(2, '0')}.mp3`;
+function builtInAudioCandidates(idx) {
+  const file = `segment-${String(idx + 1).padStart(2, '0')}.mp3`;
+
+  // Primary path for GitHub Pages and normal hosting:
+  // index.html at repository root, audio files inside /audio/.
+  const candidates = [
+    `audio/${file}`,
+    `./audio/${file}`
+  ];
+
+  // Extra fallback for your GitHub Pages project site:
+  // https://iqbalhossairdev.github.io/cryptouae/
+  if (location.hostname.endsWith('github.io')) {
+    candidates.push(`/cryptouae/audio/${file}`);
+  }
+
+  // Last fallback: direct GitHub raw file URL.
+  // This helps if the HTML is opened from another domain but the audio is in this repo.
+  candidates.push(`https://raw.githubusercontent.com/iqbalhossairdev/cryptouae/main/audio/${file}`);
+
+  return candidates;
+}
+
+async function playAudioFromCandidates(idx, runId, onEnd) {
+  const candidates = builtInAudioCandidates(idx);
+  let pos = 0;
+
+  function tryNext() {
+    if (runId !== voiceRunId) return;
+
+    if (pos >= candidates.length) {
+      setMusicDucking(false);
+      stopPulse();
+      setVoiceStatus(`// AUDIO FILE ERROR - NOT FOUND: audio/segment-${String(idx + 1).padStart(2, '0')}.mp3`, 'error');
+      paused = true;
+      playing = false;
+      const btn = document.getElementById('pauseBtn');
+      if (btn) btn.textContent = '▶ RETRY AUDIO';
+      return;
+    }
+
+    const src = candidates[pos++];
+    setVoiceStatus(`// LOADING AUDIO SEGMENT ${idx + 1}: ${src}`, 'ok');
+
+    const audio = new Audio(src);
+    audio.preload = 'auto';
+    audio.volume = 1;
+    audio.playbackRate = 1.0;
+    audio.playsInline = true;
+    audio.crossOrigin = 'anonymous';
+    offlineVoiceAudio = audio;
+
+    audio.oncanplaythrough = () => {
+      if (runId !== voiceRunId) return;
+      setVoiceStatus(`// DECLAN SAGE BUILT-IN NARRATOR - READY SEGMENT ${idx + 1}`, 'ok');
+    };
+
+    audio.onplay = () => {
+      if (runId !== voiceRunId) return;
+      setMusicDucking(true);
+      startPulse();
+      setVoiceStatus(`// DECLAN SAGE BUILT-IN NARRATOR - SPEAKING SEGMENT ${idx + 1}`, 'ok');
+    };
+
+    audio.onended = () => {
+      if (runId !== voiceRunId) return;
+      offlineVoiceAudio = null;
+      setMusicDucking(false);
+      stopPulse();
+      setVoiceStatus(`// DECLAN SAGE BUILT-IN NARRATOR - FINISHED SEGMENT ${idx + 1}`, 'ok');
+      if (onEnd) onEnd();
+    };
+
+    audio.onerror = () => {
+      if (runId !== voiceRunId) return;
+      tryNext();
+    };
+
+    audio.play().catch(() => {
+      if (runId !== voiceRunId) return;
+      setMusicDucking(false);
+      stopPulse();
+      setVoiceStatus('// BROWSER BLOCKED AUDIO - TAP PAUSE/RESUME OR OPEN THE GITHUB PAGES LIVE URL', 'error');
+      paused = true;
+      playing = false;
+      const btn = document.getElementById('pauseBtn');
+      if (btn) btn.textContent = '▶ START AUDIO';
+    });
+  }
+
+  tryNext();
 }
 
 async function speakText(text, idx, onEnd) {
   stopVoice();
-
   const runId = ++voiceRunId;
-  const src = builtInAudioUrl(idx);
-  setVoiceStatus(`// DECLAN SAGE BUILT-IN NARRATOR - LOADING SEGMENT ${idx + 1}`, 'ok');
-
-  const audio = new Audio(src);
-  audio.preload = 'auto';
-  audio.volume = 1;
-  audio.playbackRate = 1.0;
-  audio.playsInline = true;
-  offlineVoiceAudio = audio;
-
-  audio.oncanplaythrough = () => {
-    if (runId !== voiceRunId) return;
-    setVoiceStatus(`// DECLAN SAGE BUILT-IN NARRATOR - READY SEGMENT ${idx + 1}`, 'ok');
-  };
-
-  audio.onplay = () => {
-    if (runId !== voiceRunId) return;
-    setMusicDucking(true);
-    startPulse();
-    setVoiceStatus(`// DECLAN SAGE BUILT-IN NARRATOR - SPEAKING SEGMENT ${idx + 1}`, 'ok');
-  };
-
-  audio.onended = () => {
-    if (runId !== voiceRunId) return;
-    offlineVoiceAudio = null;
-    setMusicDucking(false);
-    stopPulse();
-    setVoiceStatus(`// DECLAN SAGE BUILT-IN NARRATOR - FINISHED SEGMENT ${idx + 1}`, 'ok');
-    if (onEnd) onEnd();
-  };
-
-  audio.onerror = () => {
-    if (runId !== voiceRunId) return;
-    setMusicDucking(false);
-    stopPulse();
-    setVoiceStatus(`// AUDIO FILE ERROR - CHECK audio/segment-${String(idx + 1).padStart(2, '0')}.mp3`, 'error');
-    paused = true;
-    playing = false;
-    const btn = document.getElementById('pauseBtn');
-    if (btn) btn.textContent = '▶ RETRY AUDIO';
-  };
-
-  try {
-    await audio.play();
-  } catch(e) {
-    if (runId !== voiceRunId) return;
-    setMusicDucking(false);
-    stopPulse();
-    setVoiceStatus('// BROWSER BLOCKED AUDIO - TAP PAUSE/RESUME OR OPEN FROM EXTRACTED FOLDER', 'error');
-    paused = true;
-    playing = false;
-    const btn = document.getElementById('pauseBtn');
-    if (btn) btn.textContent = '▶ START AUDIO';
-  }
+  await playAudioFromCandidates(idx, runId, onEnd);
 }
 
 // ══════════════════════════════════════════════════
